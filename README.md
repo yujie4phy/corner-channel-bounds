@@ -22,5 +22,3 @@ Numerical endpoints for (3,2): lower **0.8854** (24 parent outcomes),
 simple upper **0.8938254**. These are not exact-arithmetic certificates;
 random searches need not recover the saved model, and the outer relaxation
 is not the full convergent polarization hierarchy.
-
-Citation: [CITATION.bib](CITATION.bib), key `CornerChannelBounds2026`.
