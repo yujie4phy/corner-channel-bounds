@@ -1,19 +1,11 @@
 #!/usr/bin/env python3
-"""Corner-channel bounds. Dependencies: numpy scipy cvxpy; optional mosek.
-Run: --lower / --upper / --all / --audit --model witness.npz / --test.
-Default: ordinary seesaw at p=0.8854, r=24, using bundled warm_start.npz.
-Use --random for random starts or --model FILE for another warm start.
---maximize-p selects exact-equality seesaw.
-We choose r=24; the general Caratheodory cap n^4*binom(n,2) is 243 for n=3.
-Limited r=36,48 trials found no improvement, not evidence of optimality.
-All algorithm code is here; optional NPZ files contain numerical matrices only.
+"""Corner-channel bounds: --lower / --upper / --all / --audit --model FILE / --test.
+Default: ordinary seesaw at p=0.8854, r=24, from warm_start.npz; --random overrides.
+Use --model FILE for another seed; --maximize-p for exact-equality seesaw.
+The Caratheodory cap n^4*binom(n,2) is 243 for n=3, not 24. Limited r=36,48
+trials found no improvement, not evidence of optimality. NPZ files hold data only.
 """
-import argparse
-import itertools
-import json
-import os
-import time
-import warnings
+import argparse, itertools, json, os, time, warnings
 from functools import lru_cache
 from pathlib import Path
 
@@ -41,8 +33,8 @@ def caratheodory_outcome_bound(n):
 def target_choi(n, edge, p, output_dim=None):
     P = np.diag(np.isin(np.arange(n), edge).astype(float))
     v = P.reshape(-1)
-    J = p*np.outer(v,v) + np.kron(np.eye(n)-p*P,P/2)
-    if output_dim is None or output_dim == n:
+    J = np.kron(np.eye(n),P/2) + p*(np.outer(v,v)-np.kron(P,P/2))
+    if output_dim in (None,n):
         return J
     if output_dim != 2:
         raise ValueError("Output dimension must be n or 2")
@@ -177,9 +169,8 @@ def verify_model(p, X, Y, n, d):
             target[a*n:(a+1)*n,aa*n:(aa+1)*n] = p*P @ E @ P + np.trace((np.eye(n)-p*P) @ E)*P/2
         residuals.append(float(np.linalg.norm(actual-target)))
         tp_errors.append(float(np.linalg.norm(total-np.eye(n))))
-    report["kraus_residual"] = max(residuals)
-    report["kraus_trace_error"] = max(tp_errors)
-    report["accepted"] &= max(residuals) <= 2e-8 and max(tp_errors) <= 1e-7
+    report.update(kraus_residual=max(residuals),kraus_trace_error=max(tp_errors),
+                  accepted=report["accepted"] and max(residuals) <= 2e-8 and max(tp_errors) <= 1e-7)
     return report
 
 # Recovery outputs are always compressed to B_e=C^2 during optimization.
@@ -200,11 +191,9 @@ def compress_recoveries(Y, n, d):
     result = {}
     for (e,l),y in Y.items():
         ix = [c*n+b for c in range(d) for b in e]
-        outside = np.zeros((d,d),complex)
-        for b in set(range(n))-set(e):
-            jx = [c*n+b for c in range(d)]
-            outside += y[np.ix_(jx,jx)]
-        result[e,l] = hermitian(y[np.ix_(ix,ix)] + np.kron(outside,np.eye(2)/2))
+        corner = y[np.ix_(ix,ix)]
+        outside = partial_trace(y,(d,n),(0,))-partial_trace(corner,(d,2),(0,))
+        result[e,l] = hermitian(corner + np.kron(outside,np.eye(2)/2))
     return result
 
 def load_model(path, n, d):
@@ -253,23 +242,20 @@ def grow_parent(X0, Y0, n, d, r, rng, perturb=0, method="split"):
 def seesaw_step(X0, Y0, n, d, p, update, solver):
     if update not in ("X","Y"):
         raise ValueError("update must be X or Y")
-    def trace_output(M,a,b):
-        return cp.bmat([[sum(M[i*b+k,j*b+k] for k in range(b)) for j in range(a)] for i in range(a)])
     X,Y,constraints = X0,Y0,[]
     if update == "X":
         X = [cp.Variable((n*d,n*d),hermitian=True) for _ in X0]
-        constraints += [x >> 0 for x in X] + [sum(trace_output(x,n,d) for x in X) == np.eye(n)]
+        constraints += [x >> 0 for x in X] + [sum(partial_trace(x,(n,d),(0,)) for x in X) == np.eye(n)]
     else:
         Y = {k:cp.Variable((2*d,2*d),hermitian=True) for k in Y0}
         for y in Y.values():
-            constraints += [y >> 0,trace_output(y,d,2) == np.eye(d)]
+            constraints += [y >> 0,partial_trace(y,(d,2),(0,)) == np.eye(d)]
     p_var = cp.Variable(name="p") if p is None else p
     residuals = []
     for e in edges(n):
         link = sum(link_product_fixed_Y(X[l],Y0[e,l],n,d) if update == "X" else
                    link_product_fixed_X(X0[l],Y[e,l],n,d) for l in range(len(X)))
-        J0,J1 = target_choi(n,e,0,2),target_choi(n,e,1,2)
-        residuals.append(link-(J0+p_var*(J1-J0)))
+        residuals.append(link-target_choi(n,e,p_var,2))
     if p is None:
         constraints += [p_var >= 0,p_var <= 1] + [R == 0 for R in residuals]
         objective = cp.Maximize(p_var)
@@ -292,10 +278,8 @@ def solve_seesaw(n=3, d=2, r=DEFAULT_R, p=0.8854, restarts=1, iterations=30,
         _,X0,Y0 = load_model(model_path,n,d)
     print(f"Initialization: {'random' if model_path is None else 'warm start: '+str(model_path)}",flush=True)
     for restart in range(restarts):
-        if model_path is None:
-            X,Y = random_model(n,d,r,rng)
-        else:
-            X,Y = grow_parent(X0,Y0,n,d,r,rng,perturb,growth)
+        X,Y = (random_model(n,d,r,rng) if model_path is None else
+               grow_parent(X0,Y0,n,d,r,rng,perturb,growth))
         previous = None
         for cycle in range(iterations):
             for update in ("X","Y"):
@@ -399,12 +383,10 @@ def build_outer_relaxation():
                           (size,size),order="C")
     S,Z_e,U_ef = [mapped(*trace_map(dims,k)) for k in ((0,),(0,1),(0,1,2))]
     p = cp.Variable(name="p")
-    J0,J1 = [target_choi(3,(0,1),t,2) for t in (0,1)]
+    # Parent TP implies Tr W=1; pair TP and S3 imply one-edge TP.
     constraints = [p >= 0,p <= 1,
-        sum(k*cp.trace(M) for k,M in zip((1,1,2),blocks)) == 1,
         partial_trace(S,(3,2),(0,)) == np.eye(3)/3,
-        partial_trace(Z_e,(6,2,2),(0,1)) == cp.kron(S,np.eye(2)/2),
-        linearized_link_Z(Z_e,3,2) == (J0+p*(J1-J0))/6,
+        linearized_link_Z(Z_e,3,2) == target_choi(3,(0,1),p,2)/6,
         partial_trace(U_ef,(6,4,2,2),(0,1,2)) == cp.kron(Z_e,np.eye(2)/2)]
     psd = list(blocks)
     for factor,bases in ((0,(Qt,Qs,Qp)),(1,edge_stabilizer_bases())):
@@ -414,6 +396,35 @@ def build_outer_relaxation():
     constraints += [M >> 0 for M in psd]
     # Other edges follow by S3; PPT of U_ef follows by tracing global PPT.
     return cp.Problem(cp.Maximize(p),constraints),blocks,psd
+
+def dual_diagnostics(problem):
+    """Audit the maximization Lagrangian from CVXPY duals (floating point)."""
+    if not isinstance(problem.objective,cp.Maximize):
+        raise ValueError("Dual audit expects maximization")
+    L,cone_error = problem.objective.expr,0.
+    for c in problem.constraints:
+        if c.dual_value is None or not np.isfinite(c.dual_value).all():
+            return dict(dual_accepted=False,dual_error="Missing/nonfinite dual multiplier")
+        D = np.asarray(c.dual_value)
+        if isinstance(c,cp.constraints.PSD):
+            D = hermitian(D)
+            cone_error = max(cone_error,-float(np.linalg.eigvalsh(D).min()))
+            L += cp.sum(cp.multiply(D,c.expr))
+        elif isinstance(c,(cp.constraints.Equality,cp.constraints.Inequality)):
+            if isinstance(c,cp.constraints.Inequality):
+                cone_error = max(cone_error,-float(D.min()))
+            L -= cp.sum(cp.multiply(D,c.expr))
+        else:
+            raise ValueError("Dual audit supports affine equalities/inequalities and PSD cones")
+    # Extract the affine constant and coefficients; no second solve is performed.
+    data,_,inverse = cp.Problem(cp.Minimize(L)).get_problem_data(cp.SCIPY)
+    objective = float(inverse[-1]["offset"])
+    stationarity = float(np.max(np.abs(data["c"])))
+    gap = objective-float(problem.value)
+    accepted = np.isfinite([objective,stationarity,cone_error,gap]).all()
+    return dict(dual_objective=objective,duality_gap=gap,
+                dual_stationarity_residual=stationarity,dual_cone_violation=cone_error,
+                dual_accepted=bool(accepted and max(stationarity,cone_error,abs(gap)) <= 1e-7))
 
 def solve_outer_relaxation(n=3, d=2, solver="MOSEK", verbose=False):
     if (n,d) != (3,2):
@@ -425,8 +436,12 @@ def solve_outer_relaxation(n=3, d=2, solver="MOSEK", verbose=False):
     violation = max(float(np.max(c.violation())) for c in problem.constraints)
     mineig = min(float(np.linalg.eigvalsh(hermitian(M.value)).min()) for M in psd)
     accepted = problem.status == cp.OPTIMAL and np.isfinite([problem.value,violation,mineig]).all()
-    return dict(p=float(problem.value),status=problem.status,solver=solver,
-                accepted=bool(accepted and violation <= 1e-7 and mineig >= -1e-7),
+    dual = dual_diagnostics(problem)
+    accepted = bool(accepted and violation <= 1e-7 and mineig >= -1e-7 and dual["dual_accepted"])
+    if not accepted:
+        warnings.warn("Upper SDP failed the numerical primal/dual audit; do not quote it as a bound")
+    return dict(p=dual.get("dual_objective"),primal_objective=float(problem.value),
+                status=problem.status,solver=solver,accepted=accepted,**dual,
                 max_constraint_violation=violation,min_eigenvalue=mineig,
                 seconds=problem.solver_stats.solve_time)
 
@@ -468,10 +483,8 @@ def main():
     mode = parser.add_mutually_exclusive_group()
     for name in ("lower","upper","all","audit","test"):
         mode.add_argument("--"+name,action="store_true")
-    for name,default in (("n",3),("d",2),("r",DEFAULT_R),("restarts",1),("iterations",30),("seed",0)):
-        parser.add_argument("--"+name,type=int,default=default)
-    parser.add_argument("--p",type=float,default=0.8854)
-    parser.add_argument("--perturb",type=float,default=0)
+    for name,default in dict(n=3,d=2,r=DEFAULT_R,restarts=1,iterations=30,seed=0,p=0.8854,perturb=0.).items():
+        parser.add_argument("--"+name,type=type(default),default=default)
     parser.add_argument("--growth",choices=("split","append"),default="split")
     parser.add_argument("--maximize-p",action="store_true")
     parser.add_argument("--verbose",action="store_true")
@@ -500,7 +513,7 @@ def main():
         if not args.upper:
             report["caratheodory_outcome_bound"] = caratheodory_outcome_bound(args.n)
             print(f"Parent outcomes: r={args.r}; general sufficient cap {report['caratheodory_outcome_bound']}",flush=True)
-            model_path = args.model if args.model is not None else None if args.random else DEFAULT_MODEL
+            model_path = args.model or (None if args.random else DEFAULT_MODEL)
             try:
                 report["lower"],model = solve_seesaw(args.n,args.d,args.r,None if args.maximize_p else args.p,
                     args.restarts,args.iterations,args.seed,solver,model_path,args.perturb,args.growth)
@@ -513,9 +526,10 @@ def main():
                     Y=np.array([[Y[e,l] for l in range(len(X))] for e in edges(args.n)]))
         if args.upper or args.all:
             report["upper"] = solve_outer_relaxation(args.n,args.d,solver,args.verbose)
-    print(json.dumps(report,indent=2))
+    result = json.dumps(report,indent=2)
+    print(result)
     if args.report:
-        args.report.write_text(json.dumps(report,indent=2)+"\n")
+        args.report.write_text(result+"\n")
     if not all(report[k]["accepted"] for k in ("lower","upper","audit") if k in report):
         raise SystemExit("Audit failed: do not interpret this run as a bound")
     print("Numerical estimates only, not exact primal/dual certificates.")

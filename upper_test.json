@@ -1,0 +1,34 @@
+{
+  "p": 0.8938255182862866,
+  "primal_objective": 0.893825517383225,
+  "status": "optimal",
+  "solver": "MOSEK",
+  "accepted": true,
+  "dual_objective": 0.8938255182862866,
+  "duality_gap": 9.030616254790402e-10,
+  "dual_stationarity_residual": 6.354025972044042e-09,
+  "dual_cone_violation": 8.369352492122496e-10,
+  "dual_accepted": true,
+  "max_constraint_violation": 1.449341059859135e-09,
+  "min_eigenvalue": -1.449341059859135e-09,
+  "seconds": 304.00014090538025,
+  "omitted_equality_residuals": {
+    "normalization": 1.192296927854386e-09,
+    "one_edge_tp": 5.915526076342822e-10
+  },
+  "old_primal_endpoint": 0.893825388886344,
+  "change_in_primal": 1.2849688102445356e-07,
+  "psd_cone_sizes": [
+    64,
+    64,
+    128,
+    64,
+    64,
+    128,
+    192,
+    192
+  ],
+  "wall_seconds": 309.9275371674448,
+  "strengthened": false,
+  "exact_certificate": false
+}
