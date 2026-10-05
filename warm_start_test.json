@@ -1,0 +1,78 @@
+{
+  "algorithm": "Ordinary alternating X/Y SDPs, no joint updates",
+  "initialization": {
+    "model": "warm_start.npz",
+    "source_model": "lower_model.npz",
+    "source_p": 0.8854,
+    "p": 0.885,
+    "alpha": 0.9995482267901514,
+    "formula": "X_warm = alpha X + (1-alpha) I_A tensor Tr_A(X)/3; Y unchanged",
+    "provenance": "Derived from the previously found hybrid-search witness, not an independent discovery"
+  },
+  "initial_audit": {
+    "p": 0.885,
+    "r": 24,
+    "residuals": [
+      5.188795624449365e-9,
+      4.4376678906070116e-9,
+      6.560879410224033e-9
+    ],
+    "max_choi_residual": 6.560879410224033e-9,
+    "parent_trace_error": 3.970395525575277e-9,
+    "recovery_trace_error": 6.862680230488179e-10,
+    "hermitian_error": 0,
+    "min_eigenvalue": 7.074079797754881e-7,
+    "accepted": true,
+    "kraus_residual": 6.5608792358146205e-9,
+    "kraus_trace_error": 4.782459970058523e-9
+  },
+  "initial_target_residual": 0.000692825573374894,
+  "results": [
+    {
+      "cycles": 1,
+      "p": 0.8854,
+      "r": 24,
+      "residuals": [
+        6.632041032260472e-10,
+        8.060444630119373e-10,
+        6.527184204378711e-10
+      ],
+      "max_choi_residual": 8.060444630119373e-10,
+      "parent_trace_error": 7.512821842736699e-10,
+      "recovery_trace_error": 1.0433095043188042e-10,
+      "hermitian_error": 0,
+      "min_eigenvalue": 1.792334492351801e-7,
+      "accepted": true,
+      "kraus_residual": 8.060446603682352e-10,
+      "kraus_trace_error": 8.739205554318014e-10,
+      "solver": "MOSEK",
+      "statuses": [
+        "optimal"
+      ]
+    },
+    {
+      "cycles": 1,
+      "p": 0.8854,
+      "r": 24,
+      "residuals": [
+        7.646411764154914e-9,
+        5.532278650572908e-9,
+        6.890197037299551e-9
+      ],
+      "max_choi_residual": 7.646411764154914e-9,
+      "parent_trace_error": 2.2514297289803227e-10,
+      "recovery_trace_error": 8.804932010846136e-13,
+      "hermitian_error": 0,
+      "min_eigenvalue": 6.332564306589337e-7,
+      "accepted": true,
+      "kraus_residual": 7.646411308723892e-9,
+      "kraus_trace_error": 2.2460425643698766e-10,
+      "solver": "CLARABEL",
+      "statuses": [
+        "optimal"
+      ]
+    }
+  ],
+  "upper_constraints_changed": false,
+  "upper_resolved": false
+}

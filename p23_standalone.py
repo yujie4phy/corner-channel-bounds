@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Corner-channel bounds. Dependencies: numpy scipy cvxpy; optional mosek.
 Run: --lower / --upper / --all / --audit --model witness.npz / --test.
-Lower search: --p 0.8854 --r 24; add --model witness.npz to warm-start.
+Ordinary seesaw: --p 0.8854 --r 24; add --model witness.npz to warm-start.
 Without --model, use random starts; --maximize-p selects exact-equality seesaw.
 We choose r=24; the general Caratheodory cap n^4*binom(n,2) is 243 for n=3.
 Limited r=36,48 trials found no improvement, not evidence of optimality.
@@ -247,41 +247,30 @@ def grow_parent(X0, Y0, n, d, r, rng, perturb=0, method="split"):
             Y[e,l] = random_cptp(d,2,rng)
     return X,Y
 
-# Lower bound: two exact SDPs, then an optional linearized joint step.
+# Lower bound: alternate X and Y SDPs; no joint linearization.
 def seesaw_step(X0, Y0, n, d, p, update, solver):
+    if update not in ("X","Y"):
+        raise ValueError("update must be X or Y")
     def trace_output(M,a,b):
         return cp.bmat([[sum(M[i*b+k,j*b+k] for k in range(b)) for j in range(a)] for i in range(a)])
-    def norm2(M):
-        return cp.sum_squares(cp.real(M))+cp.sum_squares(cp.imag(M))
     X,Y,constraints = X0,Y0,[]
-    if update in ("X","joint"):
+    if update == "X":
         X = [cp.Variable((n*d,n*d),hermitian=True) for _ in X0]
         constraints += [x >> 0 for x in X] + [sum(trace_output(x,n,d) for x in X) == np.eye(n)]
-    if update in ("Y","joint"):
+    else:
         Y = {k:cp.Variable((2*d,2*d),hermitian=True) for k in Y0}
         for y in Y.values():
             constraints += [y >> 0,trace_output(y,d,2) == np.eye(d)]
     p_var = cp.Variable(name="p") if p is None else p
     residuals = []
     for e in edges(n):
-        link = 0
-        for l in range(len(X)):
-            if update in ("X","joint"):
-                link += link_product_fixed_Y(X[l],Y0[e,l],n,d)
-            if update in ("Y","joint"):
-                link += link_product_fixed_X(X0[l],Y[e,l],n,d)
-            if update == "joint":
-                link -= hermitian(link_product(X0[l],Y0[e,l],n,d))
+        link = sum(link_product_fixed_Y(X[l],Y0[e,l],n,d) if update == "X" else
+                   link_product_fixed_X(X0[l],Y[e,l],n,d) for l in range(len(X)))
         J0,J1 = target_choi(n,e,0,2),target_choi(n,e,1,2)
         residuals.append(link-(J0+p_var*(J1-J0)))
     if p is None:
         constraints += [p_var >= 0,p_var <= 1] + [R == 0 for R in residuals]
         objective = cp.Maximize(p_var)
-    elif update == "joint":
-        movement = sum(norm2(x-x0) for x,x0 in zip(X,X0))/len(X)
-        movement += sum(norm2(Y[k]-Y0[k]) for k in Y)/len(Y)
-        constraints += [movement <= 0.1**2]
-        objective = cp.Minimize(sum(norm2(R) for R in residuals)+1e-4*movement)
     else:
         objective = cp.Minimize(sum(cp.norm(cp.hstack([cp.real(R),cp.imag(R)]),"fro") for R in residuals))
     problem = cp.Problem(objective,constraints)
@@ -312,18 +301,6 @@ def solve_seesaw(n=3, d=2, r=DEFAULT_R, p=0.8854, restarts=1, iterations=30,
             if result is None:
                 break
             report = audit(p_value,X,Y,n,d)
-            if p is not None and not report["accepted"]:
-                proposal = seesaw_step(X,Y,n,d,p,"joint",solver)
-                if proposal is not None:
-                    X1,Y1,_,status = proposal
-                    statuses.add(status)
-                    for alpha in (2.0**(-j) for j in range(8)):
-                        Xt = [(1-alpha)*x+alpha*y for x,y in zip(X,X1)]
-                        Yt = {k:(1-alpha)*Y[k]+alpha*Y1[k] for k in Y}
-                        trial = audit(p,Xt,Yt,n,d)
-                        if np.sum(np.square(trial["residuals"])) < np.sum(np.square(report["residuals"])):
-                            X,Y,report = Xt,Yt,trial
-                            break
             score = (not report["accepted"],-p_value if p is None else sum(report["residuals"]))
             if best is None or score < best[0]:
                 best = score,report,X,Y
