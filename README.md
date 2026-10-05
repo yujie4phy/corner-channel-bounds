@@ -9,12 +9,15 @@ python -m pip install -r requirements.txt
 python -m pip install mosek==11.0.7  # optional; requires a license
 python p23_standalone.py --test
 python p23_standalone.py --audit --model lower_model.npz
-python p23_standalone.py --lower --model warm_start.npz --p 0.8854
+python p23_standalone.py --lower
 python p23_standalone.py --upper
 ```
 
-Use Python 3.12 or newer. Without `--model`, the lower search starts randomly;
-add `--restarts 3`. MOSEK is preferred; CLARABEL/SCS are fallbacks.
+Use Python 3.12 or newer. The default lower search loads `warm_start.npz`
+beside the script (n=3, d=2, r>=24). Use `--model FILE` for another model,
+or `--random --restarts 3` for fresh starts, including other dimensions.
+In Python, `solve_seesaw()` warm-starts; `model_path=None` selects random starts.
+MOSEK is preferred; CLARABEL/SCS are fallbacks.
 The upper solve can be expensive. There are no joint linearized updates.
 
 `warm_start.npz` is a valid model at p=0.885, derived from `lower_model.npz`

@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Corner-channel bounds. Dependencies: numpy scipy cvxpy; optional mosek.
 Run: --lower / --upper / --all / --audit --model witness.npz / --test.
-Ordinary seesaw: --p 0.8854 --r 24; add --model witness.npz to warm-start.
-Without --model, use random starts; --maximize-p selects exact-equality seesaw.
+Default: ordinary seesaw at p=0.8854, r=24, using bundled warm_start.npz.
+Use --random for random starts or --model FILE for another warm start.
+--maximize-p selects exact-equality seesaw.
 We choose r=24; the general Caratheodory cap n^4*binom(n,2) is 243 for n=3.
 Limited r=36,48 trials found no improvement, not evidence of optimality.
 All algorithm code is here; optional NPZ files contain numerical matrices only.
@@ -25,6 +26,7 @@ import numpy as np
 import scipy.sparse as sp
 
 DEFAULT_R = 24
+DEFAULT_MODEL = Path(__file__).resolve().with_name("warm_start.npz")
 
 # Unnormalized Choi matrices; zero-based edges; row-major tensor indices.
 def edges(n):
@@ -280,15 +282,20 @@ def seesaw_step(X0, Y0, n, d, p, update, solver):
     return [value(x) for x in X],{k:value(y) for k,y in Y.items()},float(p_var.value) if p is None else p,problem.status
 
 def solve_seesaw(n=3, d=2, r=DEFAULT_R, p=0.8854, restarts=1, iterations=30,
-                  seed=0, solver="MOSEK", model_path=None, perturb=0, growth="split"):
+                  seed=0, solver="MOSEK", model_path=DEFAULT_MODEL, perturb=0, growth="split"):
+    """Warm-start by default; pass model_path=None for random starts."""
     rng,best,history,statuses = np.random.default_rng(seed),None,[],set()
     started = time.monotonic()
+    if model_path is not None:
+        if not Path(model_path).is_file():
+            raise ValueError(f"Warm-start file not found: {model_path}; use --model FILE or --random")
+        _,X0,Y0 = load_model(model_path,n,d)
+    print(f"Initialization: {'random' if model_path is None else 'warm start: '+str(model_path)}",flush=True)
     for restart in range(restarts):
         if model_path is None:
             X,Y = random_model(n,d,r,rng)
         else:
-            _,X,Y = load_model(model_path,n,d)
-            X,Y = grow_parent(X,Y,n,d,r,rng,perturb,growth)
+            X,Y = grow_parent(X0,Y0,n,d,r,rng,perturb,growth)
         previous = None
         for cycle in range(iterations):
             for update in ("X","Y"):
@@ -313,7 +320,8 @@ def solve_seesaw(n=3, d=2, r=DEFAULT_R, p=0.8854, restarts=1, iterations=30,
         return dict(accepted=False,statuses=sorted(statuses)),None
     _,report,X,Y = best
     report = verify_model(report["p"],X,Y,n,d)
-    report.update(solver=solver,statuses=sorted(statuses),history=history,seconds=time.monotonic()-started)
+    report.update(initialization="random" if model_path is None else "warm",
+                  solver=solver,statuses=sorted(statuses),history=history,seconds=time.monotonic()-started)
     return report,(X,Y)
 
 # Exact S3 block reduction for the (3,2) upper SDP.
@@ -468,7 +476,10 @@ def main():
     parser.add_argument("--maximize-p",action="store_true")
     parser.add_argument("--verbose",action="store_true")
     parser.add_argument("--solver",choices=("MOSEK","CLARABEL","SCS"))
-    for name in ("model","save","report"):
+    initialization = parser.add_mutually_exclusive_group()
+    initialization.add_argument("--model",type=Path,help="Override the bundled warm-start model")
+    initialization.add_argument("--random",action="store_true",help="Use random starts instead of the bundled model")
+    for name in ("save","report"):
         parser.add_argument("--"+name,type=Path)
     args = parser.parse_args()
     if args.test:
@@ -489,8 +500,12 @@ def main():
         if not args.upper:
             report["caratheodory_outcome_bound"] = caratheodory_outcome_bound(args.n)
             print(f"Parent outcomes: r={args.r}; general sufficient cap {report['caratheodory_outcome_bound']}",flush=True)
-            report["lower"],model = solve_seesaw(args.n,args.d,args.r,None if args.maximize_p else args.p,
-                args.restarts,args.iterations,args.seed,solver,args.model,args.perturb,args.growth)
+            model_path = args.model if args.model is not None else None if args.random else DEFAULT_MODEL
+            try:
+                report["lower"],model = solve_seesaw(args.n,args.d,args.r,None if args.maximize_p else args.p,
+                    args.restarts,args.iterations,args.seed,solver,model_path,args.perturb,args.growth)
+            except (ValueError,OSError) as error:
+                parser.error(f"{error}. Use --random or a matching --model FILE.")
             if args.save and model is not None:
                 X,Y = model
                 np.savez_compressed(args.save,n=args.n,d=args.d,r=len(X),p=report["lower"]["p"],
